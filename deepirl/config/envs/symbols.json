@@ -1,0 +1,6 @@
+{
+  "class": "deepirl.environments.symbols.SymbolsEnvironment",
+  "width": 32,
+  "height": 32,
+  "fixations_per_symbol": 10,
+}

@@ -1,0 +1,4 @@
+{
+  "class": "deepirl.strategies.dqn.McStrategy",
+  "epsilon": 0.5
+}
