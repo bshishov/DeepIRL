@@ -98,18 +98,18 @@ class DqnStrategy(Strategy):
     def train_on_replay(self, sess: tf.Session):
         states, actions, rewards, next_states, is_terminal = self.replay_memory.sample(self.mini_batch_size)
 
-        # Predict wit one call
-        r_all, u_all, u_target_all = self.model.predict_vars(sess, np.concatenate((states, next_states)), [
-            self.model.rewards,
-            self.model.u,
-            self.model.u_target
-        ])
-
-        # Split for current and next states
-        _, u, _ = r_all[:len(states)], u_all[:len(states)], u_target_all[:len(states)]
-        r_next, u_next, u_target_next = r_all[len(states):], u_all[len(states):], u_target_all[len(states):]
-
         if self.model.double:
+            # Predict wit one call
+            r_all, u_all, u_target_all = self.model.predict_vars(sess, np.concatenate((states, next_states)), [
+                self.model.rewards,
+                self.model.u,
+                self.model.u_target
+            ])
+
+            # Split for current and next states
+            _, u, _ = r_all[:len(states)], u_all[:len(states)], u_target_all[:len(states)]
+            r_next, u_next, u_target_next = r_all[len(states):], u_all[len(states):], u_target_all[len(states):]
+
             # Q(s, a) <- R(s, a) + gamma * Q`(s', argmax a' (Q(s', a')))
             # Q(s, a) <- R(s, a) + U(s, a)
             # a` = argmax a' [ Q(s', a') ]   -- next a
@@ -119,6 +119,10 @@ class DqnStrategy(Strategy):
             u_targets = self.discount_factor * (r_next[range(self.mini_batch_size), next_a] +
                                                 u_target_next[range(self.mini_batch_size), next_a])
         else:
+            r_all, u_all, _, _ = self.model.predict(sess, np.concatenate((states, next_states)))
+            _, u = r_all[:len(states)], u_all[:len(states)]
+            r_next, u_next = r_all[len(states):], u_all[len(states):]
+
             # Q(s, a) <- R(s, a) + gamma * max a' [ Q(s', a') ]
             # Q(s, a) <- R(s, a) + U(s, a)
             # U(s, a) <- gamma * max a' [ Q(s', a') ]
@@ -154,7 +158,7 @@ class McStrategy(Strategy):
 
     def run(self, sess: tf.Session, num_episodes: int, *args, **kwargs):
         for episode in range(num_episodes):
-            states, actions, rewards, q = self.play_episode(sess)
+            states, actions, rewards, u = self.play_episode(sess)
             total_reward = rewards.sum()
             self.mean_reward.add(total_reward)
 
@@ -162,34 +166,36 @@ class McStrategy(Strategy):
             # Q(s, a, w') = r + gamma * max[a] Q(s', a, w)
 
             # Q value of the last action = R(s)
-            q[-1, actions[-1]] = rewards[-1]
-            self.replay.append(states[-1], q[-1])
+            # U value of the last action = 0.0
+            u[-1, actions[-1]] = 0.0
+            self.replay.append(states[-1], u[-1])
 
             # Discount rewards
             # From end to start:
-            # Q(s, a, t) = R(s, a, t) + gamma * Q(s, a, t + 1)  assuming that the next Q is: max a' [Q(s, a')]
+            # Q(s, a, t) <- R(s, a, t) + gamma * Q(s, a, t + 1)  assuming that the next Q is: max a' [Q(s, a')]
+            # U(s, a, y) <- gamma * (R(s, a, t + 1) + U(s, a, t + 1))
             for i in reversed(range(len(actions) - 1)):
-                q[i, actions[i]] = rewards[i] + self.discount_factor * q[i + 1, actions[i + 1]]
+                u[i, actions[i]] = self.discount_factor * (rewards[i + 1] + u[i + 1, actions[i + 1]])
                 # q[i, actions[i]] = rewards[i] + self.discount_factor * np.max(q[i + 1])
-                self.replay.append(states[i], q[i])
+                self.replay.append(states[i], u[i])
 
             if len(self.replay) > self.batch_size:
-                batch_states, batch_q = self.replay.sample(self.batch_size)
-                loss = self.model.train_dqn(sess, batch_states, batch_q)
+                batch_states, batch_u = self.replay.sample(self.batch_size)
+                loss = self.model.train_dqn(sess, batch_states, batch_u)
 
                 print('MC: Episode: {0}/{1} Loss={2:.5f} R: {3:.3f}  Avg R: {4:.3f}'
                       .format(episode, num_episodes, loss, total_reward, self.mean_reward.value))
 
     def play_episode(self, sess: tf.Session, use_policy: bool = False):
         states = []
-        q_values = []
+        u_values = []
         actions = []
         rewards = []
 
         last_state = self.env.reset()
 
         while True:
-            predicted_rewards, _, predicted_q, predicted_policy = self.model.predict(sess, [last_state])
+            predicted_r, predicted_u, _, predicted_policy = self.model.predict(sess, [last_state])
 
             if use_policy:
                 action = np.random.choice(self.env.num_actions, p=predicted_policy[0])
@@ -198,21 +204,22 @@ class McStrategy(Strategy):
                 if np.random.rand() < self.epsilon:
                     action = np.random.randint(0, self.env.num_actions)
                 else:
-                    action = np.argmax(predicted_q[0])
+                    # Q = R + U
+                    action = np.argmax(predicted_r[0] + predicted_u[0])
 
             new_state = self.env.do_action(action)
 
             states.append(last_state)
             actions.append(action)
-            rewards.append(predicted_rewards[0][action])
-            q_values.append(predicted_q[0])
+            rewards.append(predicted_r[0][action])
+            u_values.append(predicted_u[0])
 
             if self.env.is_terminal():
                 break
 
             last_state = new_state
 
-        return np.array(states), np.array(actions), np.array(rewards), np.array(q_values)
+        return np.array(states), np.array(actions), np.array(rewards), np.array(u_values)
 
 
 class DqnBroadStrategy(Strategy):
@@ -267,7 +274,12 @@ class DqnBroadStrategy(Strategy):
                     # Q(s, a) <- R(s, a) + gamma * max a' [ Q(s', a') ]
                     # U(s, a) <- gamma * max a' [ Q(s', a') ]
                     # Assuming that we are following the policy
-                    u[actions] = self.discount_factor * np.max(next_r + next_u, axis=1)
+                    #u[actions] = self.discount_factor * np.max(next_r + next_u, axis=1)
+
+                    # TODO: double check
+                    # Maybe use softmax over next_r + next_u directly
+                    u[actions] = self.discount_factor * np.sum(policy * (next_r + next_u), axis=1)
+
 
                     # E-greedy policy
                     if np.random.rand() < self.epsilon:

@@ -2,6 +2,7 @@ import argparse
 import time
 import tensorflow as tf
 import numpy as np
+import cv2
 
 from deepirl.utils.replay import StateActionReplay
 from deepirl.utils.config import instantiate
@@ -10,8 +11,18 @@ from deepirl.environments.base import Environment
 import deepirl.utils.vizualization as v
 
 
-def explain(env: Environment, sess: tf.Session, model: Model, replay: StateActionReplay, frame_rate: float = 30.0):
+def explain(env: Environment, sess: tf.Session, model: Model, replay: StateActionReplay,
+            frame_rate: float = 20.0, output_path: str=''):
     wnd = v.Window(900, 700)
+
+    writer = None
+    frames = 0
+    video_frames_to_write = 60 * frame_rate  # one minute
+    if output_path:
+        print('Recording video: {0}'.format(output_path))
+        fourcc = cv2.VideoWriter_fourcc(*'MJPG')
+        writer = cv2.VideoWriter(output_path, fourcc, frame_rate, (wnd.width, wnd.height))
+
     w = 200
     h = 320
     padding = 20
@@ -40,24 +51,36 @@ def explain(env: Environment, sess: tf.Session, model: Model, replay: StateActio
     wnd.add_drawer(q_drawer)
     wnd.add_drawer(p_drawer)
 
-    while True:
-        for state, action in replay.iterate():
-            state1_drawer.set_value(state[..., 0])
-            state2_drawer.set_value(state[..., 1])
+    for state, action in replay.iterate():
+        state1_drawer.set_value(state[..., 0])
+        state2_drawer.set_value(state[..., 1])
 
-            r, u, q, p = model.predict(sess, [state])
+        r, u, q, p = model.predict(sess, [state])
 
-            expert = np.zeros_like(r[0])
-            expert[action] = 1.0
-            expert_drawer.set_value(expert.reshape(state.shape[:2]))
+        expert = np.zeros_like(r[0])
+        expert[action] = 1.0
+        expert_drawer.set_value(expert.reshape(state.shape[:2]))
 
-            r_drawer.set_value(r[0].reshape(state.shape[:2]))
-            u_drawer.set_value(u[0].reshape(state.shape[:2]))
-            q_drawer.set_value(q[0].reshape(state.shape[:2]))
-            p_drawer.set_value(p[0].reshape(state.shape[:2]))
+        r_drawer.set_value(r[0].reshape(state.shape[:2]))
+        u_drawer.set_value(u[0].reshape(state.shape[:2]))
+        q_drawer.set_value(q[0].reshape(state.shape[:2]))
+        p_drawer.set_value(p[0].reshape(state.shape[:2]))
 
-            wnd.draw()
-            time.sleep(1.0 / frame_rate)
+        wnd.draw()
+        frames += 1
+
+        if writer is not None:
+            if frames < video_frames_to_write:
+                writer.write(wnd.screen)
+            if frames == video_frames_to_write:
+                print('Saving video to: {0}'.format(output_path))
+                writer.release()
+
+        # No need to sleep. Computation take too much time already
+        #time.sleep(1.0 / frame_rate)
+
+    if writer is not None:
+        writer.release()
 
 
 def main(arguments):
@@ -77,7 +100,7 @@ def main(arguments):
             sess.run(tf.global_variables_initializer())
             model.load_if_exists(sess, arguments.model_path)
 
-            explain(env, sess, model, expert_replay)
+            explain(env, sess, model, expert_replay, output_path=arguments.output)
 
 
 if __name__ == '__main__':
@@ -93,5 +116,7 @@ if __name__ == '__main__':
     # Meta parameters
     parser.add_argument("--model_path", type=str, help="Path to save model to", default='/netscratch/shishov/eye_irl')
     parser.add_argument("--device", type=str, help="Device to use", default='/device:GPU:0')
+
+    parser.add_argument("--output", type=str, default='', help='Output recorded video path')
 
     main(parser.parse_args())

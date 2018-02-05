@@ -24,6 +24,8 @@ class Model(object):
                  ):
         self.dqn_step = 1
         self.irl_step = 1
+        self.double = False
+        self.dueling = False
 
         self._outputs = outputs
 
