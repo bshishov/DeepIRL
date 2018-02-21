@@ -6,12 +6,19 @@ import cv2
 
 from deepirl.utils.replay import StateActionReplay
 from deepirl.utils.config import instantiate
-from deepirl.models.dqn import Model
+from deepirl.models.base import RQModelBase
 from deepirl.environments.base import Environment
 import deepirl.utils.vizualization as v
 
 
-def explain(env: Environment, sess: tf.Session, model: Model, replay: StateActionReplay,
+def square(a):
+    if len(a.shape) >= 2:
+        return a
+
+    return np.reshape(a, (-1, int(np.sqrt(a.shape[0]))))
+
+
+def explain(env: Environment, sess: tf.Session, model: RQModelBase, replay: StateActionReplay,
             frame_rate: float = 20.0, output_path: str=''):
     wnd = v.Window(900, 700)
 
@@ -55,16 +62,16 @@ def explain(env: Environment, sess: tf.Session, model: Model, replay: StateActio
         state1_drawer.set_value(state[..., 0])
         state2_drawer.set_value(state[..., 1])
 
-        r, u, q, p = model.predict(sess, [state])
+        r, u, q, p = model.predict_r_u_q_p(sess, [state])
 
-        expert = np.zeros_like(r[0])
+        expert = np.zeros_like(p[0])
         expert[action] = 1.0
-        expert_drawer.set_value(expert.reshape(state.shape[:2]))
+        expert_drawer.set_value(square(expert))
 
-        r_drawer.set_value(r[0].reshape(state.shape[:2]))
-        u_drawer.set_value(u[0].reshape(state.shape[:2]))
-        q_drawer.set_value(q[0].reshape(state.shape[:2]))
-        p_drawer.set_value(p[0].reshape(state.shape[:2]))
+        r_drawer.set_value(square(r[0]))
+        u_drawer.set_value(square(u[0]))
+        q_drawer.set_value(square(q[0]))
+        p_drawer.set_value(square(p[0]))
 
         wnd.draw()
         frames += 1
@@ -87,7 +94,7 @@ def main(arguments):
     env = instantiate(arguments.env)
 
     # Load expert trajectories
-    expert_replay = StateActionReplay(100000, env.state_shape)
+    expert_replay = StateActionReplay(12000, env.state_shape)
     expert_replay.load(arguments.expert_replay)
 
     with tf.device(arguments.device):

@@ -1,0 +1,7 @@
+{
+  "class": "deepirl.strategies.dun_broad.DunBroadStrategy",
+  "memory_capacity": 1000,
+  "epsilon": 0.5,
+  "batch_size": 32,
+  "discount_factor": 0.96
+}

@@ -26,12 +26,12 @@ def conv_residual_embedding(input_tensor: tuple, conv_filters: int, use_residual
     return x
 
 
-class Model(object):
+class DunModel(object):
     def __init__(self, input_shape, outputs,
                  conv_filters=16,
-                 dueling=True,
+                 dueling=False,
                  use_dropout=True,
-                 double=True,
+                 double=False,
                  residual=True,
                  irl_lr=1e-3,
                  dqn_lr=1e-3,
@@ -186,7 +186,7 @@ class Model(object):
 
             return net
 
-    def train_irl(self, sess, states, expert_actions):
+    def train_r(self, sess, states, expert_actions):
         feed_dict = {self.states: states, self.expert_policy: one_hot(expert_actions, self._outputs),
                      self._is_training: True}
         write_summaries = self.irl_step % 10 == 0
@@ -196,10 +196,10 @@ class Model(object):
                                                          feed_dict=feed_dict)
             self.writer.add_summary(summaries, self.irl_step)
         else:
-            loss, _ = sess.run([self.irl_loss, self.irl_train_op], feed_dict=feed_dict)
+            loss, _, self.irl_step = sess.run([self.irl_loss, self.irl_train_op, self._irl_step], feed_dict=feed_dict)
         return loss
 
-    def train_dqn(self, sess, states, target_u, average_episode_reward=None):
+    def train_u(self, sess, states, target_u, average_episode_reward=None):
         feed_dict = {self.states: states, self.target_u: target_u, self._is_training: True}
         write_summaries = self.dqn_step % 1000 == 0
         if self.writer is not None and write_summaries:
@@ -218,7 +218,7 @@ class Model(object):
 
         return loss
 
-    def predict(self, sess, states, use_target_q=False):
+    def predict_r_u_q_p(self, sess, states, use_target_q=False):
         var_set = [self.rewards, self.u, self.q, self.policy]
         if use_target_q and self.double:
             var_set = [self.rewards, self.u_target, self.q_target, self.policy_target]

@@ -1,7 +1,0 @@
-{
-  "class": "deepirl.strategies.dqn.DqnBroadStrategy",
-  "memory_capacity": 10000,
-  "epsilon": 0.3,
-  "batch_size": 32,
-  "discount_factor": 0.96
-}

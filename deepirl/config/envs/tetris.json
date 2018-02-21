@@ -1,0 +1,5 @@
+{
+  "class": "deepirl.environments.tetris.Tetris",
+  "width": 10,
+  "height": 20
+}

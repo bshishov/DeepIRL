@@ -1,5 +1,7 @@
 import numpy as np
+
 from deepirl.environments.base import Environment
+from deepirl.utils.math import gaussian_2d, append_2d_array_shifted
 
 
 SYMBOL_0 = [
@@ -133,17 +135,6 @@ def generate(width: int, height: int, symbols: list, background_noise: float, sy
     return canvas, positions
 
 
-def gaussian_2d(width: int, height: int, position: tuple, sigma: float = 0.05):
-    x, y = position
-
-    x_axis, y_axis = np.meshgrid(
-        np.linspace(-x, -x + 1, width),
-        np.linspace(-y, -y + 1, height))
-    d = np.sqrt(x_axis * x_axis + y_axis * y_axis)
-    g = np.exp(-(d ** 2 / (2.0 * sigma ** 2)))
-    return g
-
-
 def generate_samples(positions,
                      fixations_overview: int=0,
                      fixations_spread: tuple=(3, 5),
@@ -170,6 +161,9 @@ class SymbolsEnvironment(Environment):
     def __init__(self,
                  width: int,
                  height: int,
+                 actions_width: int,
+                 actions_height: int,
+                 discrete: bool=True,
                  symbols=SYMBOLS,
                  static_noise: float = 0.1,
                  dynamic_noise: float = 0.1,
@@ -184,12 +178,15 @@ class SymbolsEnvironment(Environment):
         if seed is not None:
             np.random.seed(seed)
         self.h, self.w = height, width
-        super(self.__class__, self).__init__(state_shape=(self.h, self.w, 2), num_actions=self.w * self.h)
+        self.actions_h, self.actions_w = actions_height, actions_width
+        super(self.__class__, self).__init__(state_shape=(self.h, self.w, 2),
+                                             num_actions=self.actions_w * self.actions_h,
+                                             discrete=discrete)
         self.symbols = symbols
         self.dynamic_noise = dynamic_noise
         self.forget_rate = forget_rate
 
-        self._centered_sight_map = gaussian_2d(self.w, self.h, (0.5, 0.5), sigma=sight_sigma) * sight_per_fixation
+        self._centered_sight_map = gaussian_2d(self.w, self.h, x=0.5, y=0.5, sigma=sight_sigma) * sight_per_fixation
         self._generator = lambda: generate(width, height,
                                            background_noise=static_noise,
                                            symbols=self.symbols,
@@ -226,45 +223,30 @@ class SymbolsEnvironment(Environment):
         else:
             return self._state_transition(self.state.copy(), action)
 
-    def position_to_action(self, x, y):
-        return int(y) * self.w + int(x)
+    def position_to_action(self, x: float, y: float):
+        x *= self.actions_w
+        y *= self.actions_h
+        return int(y) * self.actions_w + int(x)
 
     def is_terminal(self):
         return self.step > self.max_actions
 
     def _state_transition(self, state, action):
-        h, w = self.image.shape
-        x = action % w
-        y = action // w
+        # Action space to state space conversion
+        # Action space to 2d {x, y} [0, 1]
+        x = float(action % self.actions_w) / (self.actions_w - 1)
+        y = float(action // self.actions_w) / (self.actions_h - 1)
+
+        # Action space {x, y} [0, 1]  -> state space x [0, w], y [0, h]
+        x = int(x * self.w)
+        y = int(y * self.h)
 
         # MDP transition:
         # Add some noise to the original image
         state[:, :, 0] = self.image + np.random.random(self.image.shape) * self.dynamic_noise
 
         # Sight map
-        # Draw a gaussian distributed area onto coverage map in the action location
-        # self.raw[:, :, 1] += sight_map((x / w, y / h)) * sight_per_fixation  # NOT efficient
-
-        # This is just copying the patch from precomputed 2D gaussian distribution
-        # to the sight coverage. Just as optimization.
-
-        half_w = w // 2
-        half_h = h // 2
-
-        # Sight map patch bounds, the patch is shifted by action
-        left_1 = max(x - half_w, 0)
-        right_1 = min(x + half_w, w)
-        top_1 = max(y - half_h, 0)
-        bottom_1 = min(y + half_h, h)
-
-        # Gaussian dist patch bounds, the patch is shifted by action
-        left_2 = max(half_w - x, 0)
-        right_2 = min(w - x + half_w, w)
-        top_2 = max(half_h - y, 0)
-        bottom_2 = min(h - y + half_h, h)
-
-        # Fill th sight coverage map according to bounds
-        state[top_1:bottom_1, left_1:right_1, 1] += self._centered_sight_map[top_2:bottom_2, left_2:right_2]
+        append_2d_array_shifted(state[..., 1], self._centered_sight_map, x - self.w // 2, y - self.h // 2)
 
         # Forgetting the old sight coverage a bit
         if self.forget_rate < 1.0:
@@ -287,8 +269,8 @@ def generate_expert_trajectories(env: SymbolsEnvironment,
         # N fixations per each symbol
         for x, y in env.positions:
             for fixation_i in range(env.fixations_per_symbol):
-                sample_x = x + np.random.rand() * fixation_spread_x
-                sample_y = y + np.random.rand() * fixation_spread_y
+                sample_x = float(x + np.random.rand() * fixation_spread_x) / (env.w - 1)
+                sample_y = float(y + np.random.rand() * fixation_spread_y) / (env.h - 1)
                 samples.append(env.position_to_action(sample_x, sample_y))
 
         for action in samples:
@@ -306,8 +288,8 @@ def _test_explain():
     wnd.add_drawer(state_drawer1)
     wnd.add_drawer(state_drawer2)
 
-    env = SymbolsEnvironment(32, 32, fixations_per_symbol=10)
-    replay = generate_expert_trajectories(env, num_trajectories=10)
+    env = SymbolsEnvironment(32, 32, actions_width=10, actions_height=10, fixations_per_symbol=10, same_image=True, seed=42)
+    replay = generate_expert_trajectories(env, num_trajectories=10, capacity=100)
 
     while True:
         for state, action in replay.iterate():
@@ -317,7 +299,7 @@ def _test_explain():
             time.sleep(0.01)
 
 
-if __name__ == '__main__':
+def generate_trajectories():
     import argparse
     from deepirl.utils.config import instantiate
 
@@ -334,3 +316,8 @@ if __name__ == '__main__':
     print('Saving...')
     replay.save(args.out)
     print('Saved to {0}'.format(args.out))
+
+
+if __name__ == '__main__':
+    #_test_explain()
+    generate_trajectories()

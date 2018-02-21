@@ -36,6 +36,14 @@ class GenericMemory(ReplayBase):
         self._filled = 0
         self._definitions = definitions
 
+    @property
+    def capacity(self):
+        return self._capacity
+
+    @property
+    def filled(self):
+        return self._filled
+
     def append(self, *args):
         self._memory[self._i] = args
         self._i = (self._i + 1) % self._capacity
@@ -46,16 +54,24 @@ class GenericMemory(ReplayBase):
         batch = self._memory[indices]
         return (batch[col] for col, _, _ in self._definitions)
 
+    def get_col(self, col_name):
+        return self._memory[:self._filled][col_name]
+
     def __len__(self):
         return self._filled
 
     def save(self, path: str):
-        # Save only the filled part
-        np.save(path, self._memory[:self._filled])
+        # Save only the filled part to compressed array
+        np.savez_compressed(path, memory=self._memory[:self._filled])
 
     def load(self, path: str):
-        # Load only the filled part
+        # Load only the filled part from compressed array
         data = np.load(path)
+
+        # If it is a compressed array
+        if not isinstance(data, np.ndarray):
+            data = data['memory']
+
         self._filled = min(len(data), self._capacity)
         self._i = self._filled
 
@@ -66,6 +82,9 @@ class GenericMemory(ReplayBase):
     def iterate(self):
         for i in range(self._filled):
             yield self._memory[i]
+
+    def __getitem__(self, *args, **kwargs):
+        return self._memory.__getitem__(*args, **kwargs)
 
 
 class DqnReplayMemory(GenericMemory):

@@ -115,6 +115,9 @@ class ImageDrawer(Drawer):
 
     @img.setter
     def img(self, value: np.ndarray):
+        self.set_value(value)
+
+    def set_value(self, value: np.ndarray):
         if value is None:
             self._img = None
             return
@@ -126,7 +129,7 @@ class ImageDrawer(Drawer):
 
         if channels == 1:
             self._img = np.zeros(value.shape, dtype=np.uint8)
-            cv2.normalize(value, self._img, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_8U)
+            cv2.normalize(value.astype(np.float32), self._img, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_8U)
             if self.color_map is ColorMap.NONE:
                 self._img = cv2.cvtColor(self._img, cv2.COLOR_GRAY2BGR)
             else:
@@ -244,14 +247,16 @@ class HistogramDrawer(Drawer):
         self._img = np.zeros((bounds.height, bounds.width, 1), dtype=np.uint8)
 
     def set_value(self, value: np.ndarray):
-        hist, bins = np.histogram(value, bins=self.bins, normed=True)
+        hist, bins = np.histogram(value, bins=self.bins, density=True)
+        #hist, bins = np.histogram(value, bins=self.bins)
         min_val = value.min()
         max_val = value.max()
         mean_val = value.mean()
         sigma = value.std()
 
         img = np.zeros((self.bounds.height, len(hist), 3), dtype=np.uint8)
-        hist = (np.clip(1 - np.array(hist) * 0.8, 0, 1) * self.bounds.height).astype(dtype=np.uint8)
+        hist = (np.clip(1 - np.array(hist), 0, 1) * self.bounds.height).astype(dtype=np.uint8)
+        #hist = (np.clip(1 - np.array(hist) / (value.size / len(hist)), 0, 1) * self.bounds.height).astype(dtype=np.uint8)
         for i, val in enumerate(hist):
             pos = float(i / len(hist)) * (max_val - min_val) + min_val
             dist = np.abs(pos - mean_val)
@@ -263,7 +268,6 @@ class HistogramDrawer(Drawer):
                 img[val:, i, ...] = 155
             else:
                 img[val:, i, ...] = 100
-
 
         self._img = cv2.resize(img, self.bounds.size, interpolation=cv2.INTER_LINEAR)
 

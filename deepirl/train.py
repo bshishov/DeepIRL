@@ -3,22 +3,28 @@ import argparse
 
 from deepirl.utils.replay import StateActionReplay
 from deepirl.utils.config import instantiate
-from deepirl.models.dqn import Model
+from deepirl.models.base import RQModelBase
+from deepirl.utils import IncrementalMean
 
 
 IRL_MEMORY_SIZE = 10000
-IRL_BATCH_SIZE = 256
-IRL_STOP_LOSS = 2.0
+IRL_BATCH_SIZE = 128
+IRL_LOSS_DELTA_STOP = 0.001
 
 
-def train_irl(sess: tf.Session, model: Model, replay: StateActionReplay, epochs: int):
+def train_irl(sess: tf.Session, model: RQModelBase, replay: StateActionReplay, epochs: int):
+    avg_delta_loss = IncrementalMean(50)
+    loss = 0
     for epoch in range(epochs):
         if len(replay) > IRL_BATCH_SIZE:
             states, actions = replay.sample(IRL_BATCH_SIZE)
-            loss = model.train_irl(sess, states, actions)
-            print('IRL: Epoch: {0}/{1} Loss: {2:.3f}'.format(epoch, epochs, loss))
-            if loss < IRL_STOP_LOSS:
-                print('Loss is already too small, stopping IRL training')
+            new_loss = model.train_r(sess, states, actions)
+            avg_delta_loss.add(new_loss - loss)
+            loss = new_loss
+            print('IRL: Epoch: {0}/{1} Loss: {2:.3f} AvgLossDelta: {3:.3f}'
+                  .format(epoch, epochs, loss, avg_delta_loss.value))
+            if avg_delta_loss.value < IRL_LOSS_DELTA_STOP:
+                print('No significant change in loss, stopping training')
                 return
 
 
@@ -26,14 +32,14 @@ def main(arguments):
     env = instantiate(arguments.env)
 
     # Load expert trajectories
-    expert_replay = StateActionReplay(100000, env.state_shape)
+    expert_replay = StateActionReplay(30000, env.state_shape)
     print('Loading trajectories from {0}'.format(arguments.expert_replay))
     expert_replay.load(arguments.expert_replay)
 
     log_path = arguments.model_path + '/logs'
 
     with tf.device(arguments.device):
-        model = instantiate(arguments.model, input_shape=env.state_shape, outputs=env.num_actions)
+        model = instantiate(arguments.model, input_shape=env.state_shape, outputs=env.num_actions)  # type: RQModelBase
         strategy = instantiate(arguments.rl, env, model)
 
         config = tf.ConfigProto()

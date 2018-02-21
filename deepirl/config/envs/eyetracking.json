@@ -1,0 +1,4 @@
+{
+  "class": "deepirl.environments.eyetracking.EyetrackingEnv",
+  "path_to_frames": "D:\\deepirl\\replay\\xray_expert_128x128.npz"
+}
